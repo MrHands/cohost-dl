@@ -181,10 +181,6 @@ export class CohostContext {
             },
         });
 
-        if (!res.ok) {
-            throw new Error(await res.text());
-        }
-
         return res;
     }
 
@@ -334,15 +330,14 @@ export class CohostContext {
             if (pending) return pending;
 
             const pending2 = (async () => {
-                let res: Response;
-                try {
-                    res = await this.get(props.fetch);
-                } catch (err) {
+                const res = await this.get(props.fetch);
+                if (!res.ok) {
                     if (props.canFail) {
                         console.error(`FAILED: GET ${props.fetch}`);
                         return null;
                     } else {
-                        throw err;
+                        const errorText = `${res.status} ${res.statusText}`;
+                        throw new Error(errorText);
                     }
                 }
 

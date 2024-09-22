@@ -48,7 +48,14 @@ export async function loadCohostSource(ctx: CohostContext): Promise<string> {
     const loadScript = async (src: string) => {
         await ctx.loadResourceToFile(src);
         const sourceMapURL = src.toString() + '.map';
-        const sourceMapPath = await ctx.loadResourceToFile(sourceMapURL);
+
+        let sourceMapPath: string | null = null;
+        try {
+            sourceMapPath = await ctx.loadResourceToFile(sourceMapURL);
+        } catch (err) {
+            console.error(err.message);
+            return;
+        }
 
         if (sourceMapPath) {
             const sourceMap = (await ctx.readJson(sourceMapPath)) as ISourceMap;
