@@ -22,7 +22,6 @@ import npmEntitiesXml from "npm:entities/lib/maps/xml.json" with {
 import npmEmojiMartData from "npm:@emoji-mart/data" with { type: "json" };
 
 export const DIST_PATH = "~cohost-dl/dist";
-export const POST_PAGE_SCRIPT_PATH = `${DIST_PATH}/post-page.js`;
 
 const DEVELOPMENT = false;
 const INCLUDE_DEV_PACKAGES = [
@@ -743,7 +742,10 @@ function header(ctx: CohostContext) {
         return Object.fromEntries(
             Object.entries(data).map((
                 [k, v],
-            ) => [k, ctx.propsForResourceURL(v)!.filePath]),
+            ) => [
+                k,
+                ctx.propsForResourceURL(v)!.filePath.replace(/^static\//, ""),
+            ]),
         );
     };
 
@@ -774,7 +776,8 @@ function header(ctx: CohostContext) {
             else callback(items);
         });
     };
-    
+    window.require = require;
+
     require.context = (dir, useSubdirs) => {
         if ((dir === "../../images/emoji" || dir === "../images/emoji") && !useSubdirs) {
             const data = ${JSON.stringify(convertEmoji(EMOJI))};
@@ -792,7 +795,7 @@ function header(ctx: CohostContext) {
 
     window.define = (imports, exec) => {
         if (typeof imports === 'function') {
-            create = imports;
+            exec = imports;
             imports = [];
         }
         const id = document.currentScript.dataset.id
@@ -834,8 +837,7 @@ const REFETCH_NONE =
 const IMPL_REWRITE_CDN_URLS = `
 import { generate as cssGenerate, parse as cssParse, walk as cssWalk } from "@internal/css-tree";
 function rewriteCdnUrls() {
-    const rewriteDataNode = document.getElementById('__cohost_dl_rewrite_data');
-    const rewriteData = rewriteDataNode ? JSON.parse(rewriteDataNode.innerHTML) : null;
+    const rewriteData = window.cohostDL.rewriteData;
 
     function rewriteUrl(url) {
         if (rewriteData?.urls?.[url]) return rewriteData.urls[url];
@@ -896,11 +898,11 @@ function rewriteCdnUrls() {
 }
 `;
 
-const PATCHES: Record<string, Patch[]> = {
+const PATCHES = (base: string): Record<string, Patch[]> => ({
     "i18n.ts": [
         {
             find: "loadPath: `/rc/locales/",
-            replace: "loadPath: `../../rc/locales/",
+            replace: "loadPath: " + JSON.stringify(base) + " + `/rc/locales/",
         },
     ],
     "client.tsx": [
@@ -943,21 +945,22 @@ const PATCHES: Record<string, Patch[]> = {
     "shared/env.ts": [
         {
             find: "get HOME_URL() {",
-            replace:
-                "get HOME_URL() { return new URL('../..', location.href).toString() } _doNothing() {",
+            replace: `get HOME_URL() { return new URL(${
+                JSON.stringify(base)
+            }, location.href).toString() } _doNothing() {`,
         },
     ],
     "preact/components/posts/blocks/attachments/audio.tsx": [
         {
             find: "pathEntries = new URL(block.attachment.fileURL)",
             replace:
-                "pathEntries = new URL(block.attachment.fileURL, location.href)",
+                `pathEntries = new URL(block.attachment.fileURL, location.href)`,
         },
     ],
     "preact/components/partials/project-avatar.tsx": [
         {
             find: "parsedSrc = new URL(src)",
-            replace: "parsedSrc = new URL(src, location.href); return src",
+            replace: `parsedSrc = null; return src`,
         },
     ],
     "preact/hooks/data-loaders.ts": [
@@ -970,7 +973,7 @@ const PATCHES: Record<string, Patch[]> = {
     "preact/hooks/use-image-optimizer.ts": [
         {
             find: "const parsedSrc = new URL(src);",
-            replace: "const parsedSrc = new URL(src, document.location.href);",
+            replace: `const parsedSrc = new URL(src, document.location.href);`,
         },
     ],
     "preact/providers/user-info-provider.tsx": [
@@ -1011,23 +1014,48 @@ const PATCHES: Record<string, Patch[]> = {
                 ".use(rehypeSanitize, effectiveSchema).use(rewriteCdnUrls)",
         },
     ],
+    "shared/types/asks.ts": [
+        {
+            // rewritten URLs don't pass this schema anymore
+            find: "avatarURL: z.string().url(),",
+            replace: "avatarURL: z.string(),",
+        },
+        {
+            find: "avatarPreviewURL: z.string().url(),",
+            replace: "avatarPreviewURL: z.string(),",
+        },
+    ],
 
     // PATCHES FOR HYDRATION REASONS
     "preact/components/partials/topnav.tsx": [{
         find: "sitemap.public.home()",
         replace: "'https://cohost.org/'",
     }],
-};
+});
 
-const POST_PAGE = `
-import "@/client.tsx";
-`;
+export interface FrontendScript {
+    name: string;
+    entryPoint: string;
+    base: string;
+    additionalPatches?: Record<string, Patch[]>;
+}
 
-export async function generatePostPageScript(
+export async function clearDist(ctx: CohostContext) {
+    try {
+        await Deno.remove(ctx.getCleanPath(DIST_PATH), { recursive: true });
+    } catch {
+        // not important
+    }
+}
+
+export async function generateFrontend(
     ctx: CohostContext,
     srcDir: string,
+    script: FrontendScript,
 ) {
-    console.log("compiling post page script");
+    console.log(`compiling Javascript: ${script.name}`);
+
+    const realSrcDir = await Deno.realPath(ctx.getCleanPath(srcDir));
 
     const cssTreeSourcePath = await ctx.loadResourceToFile(
         "https://esm.sh/v135/css-tree@2.3.1/es2022/css-tree.bundle.mjs",
@@ -1036,6 +1064,14 @@ export async function generatePostPageScript(
         throw new Error("could not load css-tree");
     }
     const cssTreeSource = await ctx.readText(cssTreeSourcePath);
+
+    const minisearchSourcePath = await ctx.loadResourceToFile(
+        "https://esm.sh/v135/minisearch@7.1.0/es2022/minisearch.mjs",
+    );
+    if (!minisearchSourcePath) {
+        throw new Error("could not load minisearch");
+    }
+    const minisearchSource = await ctx.readText(minisearchSourcePath);
 
     const extraFiles = Object.fromEntries(
         Object.entries(EXTRA_FILES).map((
@@ -1047,14 +1083,6 @@ export async function generatePostPageScript(
         const file of [...Object.values(EMOJI), ...Object.values(PLUS_EMOJI)]
     ) {
         await ctx.loadResourceToFile(file);
-    }
-
-    const realSrcDir = await Deno.realPath(ctx.getCleanPath(srcDir));
-
-    try {
-        await Deno.remove(ctx.getCleanPath(DIST_PATH), { recursive: true });
-    } catch {
-        // not important
     }
 
     const npmPackages: Record<string, string> = {};
@@ -1092,20 +1120,31 @@ export async function generatePostPageScript(
         npmPackages[item] = pkgRoot;
     }
 
-    const entryName = "post-page";
+    const entryName = script.name;
+
+    const patches = PATCHES(script.base);
+    if (script.additionalPatches) {
+        Object.assign(patches, script.additionalPatches);
+    }
 
     const bundle = await rollup({
-        input: `@internal/${entryName}`,
+        input: path.join(import.meta.dirname, `scripts/${entryName}.tsx`),
         plugins: [
             {
                 name: "cohost-dl-resolve",
-                load(id) {
-                    if (id === "@internal/nothing") return "";
+                load(originalId) {
+                    const id = Deno.build.os === "windows"
+                        ? originalId.replace(/\\/g, "/")
+                        : originalId;
 
-                    if (id === `@internal/${entryName}`) return POST_PAGE;
+                    if (id === "@internal/nothing") return "";
 
                     if (id === "@internal/css-tree") {
                         return cssTreeSource;
+                    }
+
+                    if (id === "@internal/minisearch") {
+                        return minisearchSource;
                     }
 
                     if (id.startsWith("@internal/missing ")) {
@@ -1146,10 +1185,10 @@ export async function generatePostPageScript(
 
                     return null;
                 },
-                async resolveId(originalId, importer) {
-                    if (originalId.includes("Trans.js")) {
-                        console.log(originalId, importer);
-                    }
+                async resolveId(originalId, originalImporter) {
+                    const importer = Deno.build.os === "windows"
+                        ? originalImporter?.replace(/\\/g, "/")
+                        : originalImporter;
 
                     let resolved: string | null = null;
 
@@ -1167,14 +1206,6 @@ export async function generatePostPageScript(
                             )
                             ? importer.slice(0, -3) + "/"
                             : importer.slice(0, -3);
-                        if (originalId.includes("shim.development")) {
-                            console.log({
-                                originalId,
-                                importer,
-                                importer2,
-                                x: new URL(originalId, importer2).toString(),
-                            });
-                        }
                         if (originalId.match(/^[^a-zA-Z@]/)) {
                             return new URL(originalId, importer2).toString() +
                                 ".js";
@@ -1330,10 +1361,13 @@ export async function generatePostPageScript(
             {
                 name: "cohost-dl-transform",
                 transform(code, originalId) {
-                    const id = path.relative(realSrcDir, originalId);
+                    const id2 = path.relative(realSrcDir, originalId);
+                    const id = Deno.build.os === "windows"
+                        ? id2.replace(/\\/g, "/")
+                        : id2;
 
-                    if (PATCHES[id]) {
-                        for (const patch of PATCHES[id]) {
+                    if (patches[id]) {
+                        for (const patch of patches[id]) {
                             if ("find" in patch) {
                                 for (let i = 0; i < 256; i++) {
                                     const index = code.indexOf(patch.find);
@@ -1356,7 +1390,7 @@ export async function generatePostPageScript(
                                 }
                             }
                         }
-                        console.log(`patched ${id}`);
+                        if (DEVELOPMENT) console.log(`patched ${id}`);
                         return code;
                     }
 

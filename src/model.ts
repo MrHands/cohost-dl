@@ -95,8 +95,14 @@ export interface IPostBlockAttachment {
     attachment: IAttachment;
 }
 
+export interface IPostBlockAttachmentRow {
+    type: "attachment-row";
+    attachments: IPostBlockAttachment[];
+}
+
 export type IPostBlock =
     | IPostBlockAttachment
+    | IPostBlockAttachmentRow
     | IPostBlockAsk
     | IPostBlockMarkdown;
 
@@ -143,12 +149,12 @@ export interface IPost {
 
 export interface ITRPCQuery {
     queryHash: string;
-    queryKey: [string[], {
+    queryKey: [string | string[], {
         input?: object;
         type: "query";
     }];
     state: {
-        data: object;
+        data: unknown;
         error: unknown | null;
         status: "success" | string;
     };
@@ -220,8 +226,8 @@ export class PageState<S> {
 
     updateQuery(
         query: string,
-        input: object | null,
-        value: object,
+        input: object | undefined,
+        value: unknown,
         ignoreIfNone = false,
     ) {
         const state = this.trpcState.queries.find((item) =>
@@ -309,4 +315,50 @@ export const COHOST_DL_USER: Omit<ILoggedIn, 'projectId'> = {
     readOnly: false,
     twoFactorActive: true,
     userId: 0,
+};
+
+export interface IDisplayPrefs {
+    autoExpandAllCws: boolean;
+    autoexpandCWs: string[];
+    beatsTimestamps: boolean;
+    chaosDay2023_showNumbers: boolean;
+    collapseLongThreads: boolean;
+    collapsedTags: string[];
+    defaultPostBoxTheme: "prefers-color-scheme" | "dark" | "light";
+    defaultShow18PlusPostsInSearches: boolean;
+    disableEmbeds: boolean;
+    disableModalPostComposer: boolean;
+    enableMobileQuickShare: boolean;
+    enableNotificationCount: boolean;
+    explicitlyCollapseAdultContent: boolean;
+    externalLinksInNewTab: boolean;
+    gifsStartPaused: boolean;
+    homeView: "dashboard" | "following";
+    isAdult: boolean;
+    pauseProfileGifs: boolean;
+    previewFeatures_lexicalPostEditor: boolean;
+    suggestedFollowsDismissed: boolean;
+}
+
+export const GENERIC_DISPLAY_PREFS: IDisplayPrefs = {
+    autoExpandAllCws: false,
+    autoexpandCWs: [],
+    beatsTimestamps: false,
+    chaosDay2023_showNumbers: true,
+    collapseLongThreads: true,
+    collapsedTags: [],
+    defaultPostBoxTheme: "prefers-color-scheme",
+    defaultShow18PlusPostsInSearches: true,
+    disableEmbeds: false,
+    disableModalPostComposer: false,
+    enableMobileQuickShare: false,
+    enableNotificationCount: true,
+    explicitlyCollapseAdultContent: true,
+    externalLinksInNewTab: true,
+    gifsStartPaused: false,
+    homeView: "dashboard",
+    isAdult: true,
+    pauseProfileGifs: false,
+    previewFeatures_lexicalPostEditor: true,
+    suggestedFollowsDismissed: false,
 };

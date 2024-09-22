@@ -13,12 +13,17 @@ import { loadAllProjectPosts } from "./src/project.ts";
 import { IPost } from "./src/model.ts";
 import { readDataPortabilityArchiveItems } from "./src/data-portability-archive.ts";
 import { loadCohostSource } from "./src/cohost-source.ts";
-import { generatePostPageScript } from "./src/post-page-script.ts";
+import { generateAllScripts } from "./src/scripts/index.ts";
 import { rewritePost } from "./src/post.ts";
+import { generateAllIndices } from "./src/post-index.ts";
+import { checkForUpdates } from "./src/changelog.ts";
+
+await checkForUpdates();
 
 const ctx = new CohostContext(COOKIE, "out");
 await ctx.init();
 
+let isLoggedIn = false;
 {
     // check that login actually worked
     const loginStateResponse = await ctx.get(
@@ -27,15 +32,16 @@ await ctx.init();
     const loginState = await loginStateResponse.json();
     if (!loginState[0].result.data.loggedIn) {
         console.error(
-            "warning:\nNot logged in. Please update your cookie configuration\n\n",
+            "\x1b[33mwarning:\nNot logged in. Please update your cookie configuration if cohost.org still exists\x1b[m\n\n",
         );
     } else {
         console.log(`logged in as ${loginState[0].result.data.email}`);
+        isLoggedIn = true;
     }
 }
 
 // JSON data
-{
+if (isLoggedIn) {
     // load all liked posts for the current page
     if (!(await ctx.hasFile("liked.json"))) {
         const liked = await loadAllLikedPosts(ctx);
@@ -49,19 +55,33 @@ await ctx.init();
             await ctx.write(`${handle}/posts.json`, JSON.stringify(posts));
         }
     }
+} else {
+    console.log("\x1b[33mnot logged in: skipping liked posts and project posts \x1b[m");
 }
 
 // javascript
 if (ENABLE_JAVASCRIPT) {
     const dir = await loadCohostSource(ctx);
-    await generatePostPageScript(ctx, dir);
+    await generateAllScripts(ctx, dir);
 }
+
+const errors: { url: string; error: Error }[] = [];
 
 // Single post pages
 {
-    const likedPosts = await ctx.readJson("liked.json") as IPost[];
+    const likedPosts: IPost[] = [];
+    if (await ctx.hasFile("liked.json")) {
+        likedPosts.push(...await ctx.readJson("liked.json"));
+    }
     const projectPosts = await Promise.all(
-        PROJECTS.map((handle) => ctx.readJson(`${handle}/posts.json`)),
+        PROJECTS.map(async (handle) => {
+            const file = `${handle}/posts.json`;
+            if (await ctx.hasFile(file)) {
+                return ctx.readJson(`${handle}/posts.json`)
+            } else {
+                return [];
+            }
+        }),
     ) as IPost[][];
 
     const allPosts = [
@@ -69,17 +89,30 @@ if (ENABLE_JAVASCRIPT) {
         ...projectPosts.flatMap((x) => x),
     ];
 
+    const loadPostPageAndCollectError = async (url: string) => {
+        try {
+            await loadPostPage(ctx, url);
+        } catch (error) {
+            console.error(`\x1b[31mFailed! ${error}\x1b[m`);
+            errors.push({ url, error });
+        }
+    };
+
     for (const post of allPosts) {
         if (SKIP_POSTS.includes(post.postId)) continue;
 
         console.log(`~~ processing post ${post.singlePostPageUrl}`);
-        await loadPostPage(ctx, post.singlePostPageUrl);
+        await loadPostPageAndCollectError(post.singlePostPageUrl);
     }
 
     // it can happen that we've cached data for a post that is now a 404.
     // I suppose we can try loading resources for those as well?
     for (const post of allPosts) {
-        await rewritePost(ctx, post, FROM_POST_PAGE_TO_ROOT);
+        try {
+            await rewritePost(ctx, post, FROM_POST_PAGE_TO_ROOT);
+        } catch {
+            // oh well!!
+        }
     }
 
     const dpaPostURLs: string[] = [];
@@ -106,9 +139,21 @@ if (ENABLE_JAVASCRIPT) {
         if (SKIP_POSTS.includes(probablyThePostId)) continue;
 
         console.log(`~~ processing additional post ${post}`);
-        await loadPostPage(ctx, post);
+        await loadPostPageAndCollectError(post);
     }
 }
 
+{
+    await generateAllIndices(ctx);
+}
+
 await ctx.finalize();
-console.log("Done");
+
+if (errors.length) {
+    console.log(
+        `\x1b[32mDone, \x1b[33mwith ${errors.length} error${errors.length === 1 ? "" : "s"}\x1b[m`,
+    );
+    for (const { url, error } of errors) console.log(`${url}: ${error}`);
+} else {
+    console.log("\x1b[32mDone\x1b[m");
+}
