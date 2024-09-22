@@ -4,7 +4,7 @@ export const COOKIE = 'connect.sid=adhjsakfahdsfjkash';
 // load all of your own posts
 export const PROJECTS = ['your-handle'];
 
-// load some specific additional posts (e.g. from GDPR export data)
+// load some specific additional posts
 export const POSTS = [
     'https://cohost.org/example/123456-example-post',
 ];
@@ -26,3 +26,8 @@ export const SKIP_POSTS = [
 // then set this to '/Users/example/Desktop/cohost-data'.
 // This information will then be used to also load posts you've commented on or sent an ask for.
 export const DATA_PORTABILITY_ARCHIVE_PATH = '';
+
+// Set this to false to disable Javascript, which is responsible for interaction on the generated pages
+// (read more/read less, opening/closing CWs, image attachments, etc.).
+// It's a little janky, so maybe you want an HTML-only export.
+export const ENABLE_JAVASCRIPT = true;
